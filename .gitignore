@@ -1,0 +1,6 @@
+/log/*
+/result/*
+/model/*
+/.word_vectors_cache/*
+*.pyc
+/.idea/*
