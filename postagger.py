@@ -21,7 +21,6 @@ from torchnlp.word_to_vector import GloVe
 # setting logging
 logging.basicConfig(filename='', format='%(asctime)-15s %(levelname)s: %(message)s', level=logging.INFO)
 
-
 def load_conll_data(path):
     data_set = []
     label_set = []
@@ -41,14 +40,25 @@ def load_conll_data(path):
     return data_set, label_set
 
 
+def load_my_json_data(path):
+    with open(path, 'r') as reader:
+        raw_data = json.load(reader)
+        data_set = raw_data['seq_ins']
+        label_set = raw_data['seq_outs']
+    return data_set, label_set
+
+
 def load_data(train_path, dev_path, test_path):
-    train_data, train_label = load_conll_data(train_path)
-    dev_data, dev_label = load_conll_data(dev_path)
-    test_data, test_label = load_conll_data(test_path)
+    # train_data, train_label = load_conll_data(train_path)
+    # dev_data, dev_label = load_conll_data(dev_path)
+    # test_data, test_label = load_conll_data(test_path)
+    train_data, train_label = load_my_json_data(train_path)
+    dev_data, dev_label = load_my_json_data(dev_path)
+    test_data, test_label = load_my_json_data(test_path)
     return train_data, train_label, dev_data, dev_label, test_data, test_label
 
 
-def make_dict(opt, train_x, specific_label_file=True, train_y=None, dev_y=None, test_y=None):
+def make_dict(opt, train_x, train_y=None, dev_y=None, test_y=None):
     word_set = set()
     word2id = {}
     label2id = {}
@@ -59,17 +69,27 @@ def make_dict(opt, train_x, specific_label_file=True, train_y=None, dev_y=None, 
             word_set.add(word)
 
     # collect label set
-    if specific_label_file:
+    def flatten(l):
+        """ list of list to list"""
+        return [item for sublist in l for item in sublist]
+
+    def purify(l):
+        """ remove B- and I- """
+        return set([item.replace('B-','').replace('I-', '') for item in l])
+
+    if opt.label_set_path:
         logging.info('load label from a specific label list file.')
         with open(opt.label_set_path, 'r') as reader:
             label_set = reader.read().strip().split('\n')
     else:
         logging.info('load label from train, dev, test set')
-        raise NotImplementedError
+        label_set = list(purify(set(flatten(train_y))) | purify(set(flatten(dev_y))) | purify(set(flatten(test_y))))
+        # print('!!!!!!!! 1111 !!!!!!!', label_set)
 
     # sort to make embedding id fixed
     word_set = sorted(list(word_set))
     label_set = sorted(label_set)
+    print('!!!!!!!!debug!!!!!!!', len(label_set))
 
     # build 3 dict
     for word in ['<oov>', '<pad>'] + word_set:
@@ -89,7 +109,10 @@ def load_embedding(opt, word2id):
         raise NotImplementedError
     else:
         logging.info('Load embedding from pytorch-nlp.')
-        embedding_dict = GloVe()
+        if opt.embedding_cache:
+            embedding_dict = GloVe(cache=opt.embedding_cache) # load embedding cache from a specific place
+        else:
+            embedding_dict = GloVe() # load embedding cache from local dir for download now
         logging.info('Load embedding finished.')
         pad_id = word2id['<pad>']
         n_v = len(word2id)
@@ -273,10 +296,10 @@ class Model(nn.Module):
 def eval_model(model, valid_x, valid_y, valid_lens, valid_text, id2label, opt):
     if opt.output is not None:
         output_path = opt.output
-        fpo = codecs.open(output_path, 'w', encoding='utf-8')
+        fpo = codecs.open(output_path, 'wb', encoding='utf-8')
     else:
         descriptor, output_path = tempfile.mkstemp(suffix='.tmp')
-        fpo = codecs.getwriter('utf-8')(os.fdopen(descriptor, 'w'))
+        fpo = codecs.getwriter('utf-8')(os.fdopen(descriptor, 'wb'))
 
     model.eval()
     for x, y, lens, text in zip(valid_x, valid_y, valid_lens, valid_text):
@@ -284,8 +307,10 @@ def eval_model(model, valid_x, valid_y, valid_lens, valid_text, id2label, opt):
         output_data = output.data
         for bid in range(len(x)):
             for k, (word, true_tag, predict_tag) in enumerate(zip(text[bid], y[bid], output_data[bid])):
-                true_tag = id2label[true_tag]
-                predict_tag = id2label[predict_tag]
+                # print('1111111111111111 debug!!!!', true_tag)
+                true_tag = id2label[int(true_tag)]
+                # print('!!!!!!!!!debug!!!!', true_tag)
+                predict_tag = id2label[int(predict_tag)]
                 print('{1} {2} {3}'.format(k + 1, word, true_tag, predict_tag), file=fpo)
                 # print('{0}\t{1}\t{2}\t{3}'.format(k + 1, word, true_tag, predict_tag), file=fpo)
             print(file=fpo)
@@ -295,7 +320,7 @@ def eval_model(model, valid_x, valid_y, valid_lens, valid_text, id2label, opt):
     # script_args = ['perl', opt.script, '< ', output_path]
     with open(output_path, 'r') as res_file:
         p = subprocess.Popen(script_args, stdout=subprocess.PIPE, stdin=res_file)
-        logging.info('Eval script args:{0}'.format(p.args))
+        # logging.info('Eval script args:{0}'.format(p.args))
         p.wait()
 
         std_results = p.stdout.readlines()
@@ -350,7 +375,7 @@ def train_model(epoch, model, optimizer,
         epoch, cnt, optimizer.param_groups[0]['lr'], total_loss, dev_f1_score))
 
     if dev_f1_score > best_valid:
-        torch.save(model.state_dict(), os.path.join(opt.model, 'model.pkl'))
+        torch.save(model.state_dict(), os.path.join(opt.model, 'model.pl'))
         best_valid = dev_f1_score
         test_precision, test_recall, test_f1_score = eval_model(model, test_x, test_y, test_lens, test_text,
                                    ix2label, opt)
@@ -370,7 +395,7 @@ def train_and_test(opt):
         len(train_y), len(dev_y), len(test_y)))
 
     # create dict for label and word
-    word2id, label2id, id2label = make_dict(opt, train_x)
+    word2id, label2id, id2label = make_dict(opt, train_x, train_y, dev_y, test_y)
     nclasses = len(label2id)
 
     # load & create embedding layer
@@ -441,12 +466,14 @@ def main():
     cmd.add_argument('--train_path', required=True, help='the path to the training file.')
     cmd.add_argument('--dev_path', required=True, help='the path to the validation file.')
     cmd.add_argument('--test_path', required=True, help='the path to the testing file.')
-    cmd.add_argument('--label_set_path', required=True, help='the path to the file record all label name')
-    cmd.add_argument("--model", required=True, help="path to save model")
+    cmd.add_argument('--label_set_path', default='', help='the path to the file record all label name')
+    cmd.add_argument("--model", required=True, help="path to save model,eg: ./model.pkl")
     cmd.add_argument('--output', help='The path to the output file.')
-    cmd.add_argument("--script", required=True, help="The path to the evaluation script: ./eval/conlleval.pl")
+    cmd.add_argument("--script", default='./eval/conlleval.pl', help="The path to the evaluation script")
     cmd.add_argument("--word_embedding", type=str, default='',
                      help="pass a path to word vectors from file(not finished), empty string to load from pytorch-nlp")
+    cmd.add_argument("--embedding_cache", type=str, default='',
+                     help="path to embedding cache dir. if use pytorch nlp, use this path to avoid downloading")
 
     # environment setting
     cmd.add_argument('--seed', default=1, type=int, help='the random seed.')
@@ -462,7 +489,7 @@ def main():
 
     cmd.add_argument("--batch_size", "--batch", type=int, default=128, help='the batch size.')
     cmd.add_argument("--hidden_dim", "--hidden", type=int, default=128, help='the hidden dimension.')
-    cmd.add_argument("--max_epoch", type=int, default=30, help='the maximum number of iteration.')
+    cmd.add_argument("--max_epoch", type=int, default=100, help='the maximum number of iteration.')
     cmd.add_argument("--word_dim", type=int, default=300, help='the input dimension.')
     cmd.add_argument("--dropout", type=float, default=0.5, help='the dropout rate')
     cmd.add_argument("--depth", type=int, default=2, help='the depth of lstm')

@@ -19,4 +19,4 @@
 
 ## Usage
     Train and run the model in the project dir.
-    python3 postagger.py  --train_and_test --train_path ./data/atis_train --dev_path ./data/atis_dev --test_path ./data/atis.test.txt --label_set_path ./data/atis_slot_names.txt --model ./model/ --output ./result/result.txt --script ./eval/conlleval.pl --gpu 0
+    python3 postagger.py  --train_an modest'md_test --train_path ./data/atis_train --dev_path ./data/atis_dev --test_path ./data/atis.test.txt --label_set_path ./data/atis_slot_names.txt --model ./model/ --output ./result/result.txt --script ./eval/conlleval.pl --gpu 0
